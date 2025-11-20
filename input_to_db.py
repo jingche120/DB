@@ -20,8 +20,8 @@ load_dotenv()
 # [!! 您的要求 !!]
 # 我們先設定一個「測試上限」，只處理 10 筆資料來驗證流程是否成功。
 # 驗證成功後，您可以將此值改為 None，來處理全部 3 萬筆資料。
-RECORDS_TO_PROCESS = None # <-- [!!] 只處理 10 筆來測試
-# RECORDS_TO_PROCESS = None # (當您要跑全部時，請註解掉上面那行，改用這行)
+#RECORDS_TO_PROCESS = 10 # <-- [!!] 只處理 10 筆來測試
+RECORDS_TO_PROCESS = None # (當您要跑全部時，請註解掉上面那行，改用這行)
 
 # 1. 資料庫連線 (必須與 .env 一致)
 DB_SETTINGS = {
@@ -44,10 +44,6 @@ EMBEDDING_DIM = 768 # 必須與 DB 中的 VECTOR(768) 匹配
 # 4. 批次處理設定 (一次打包 100 筆資料再寫入 DB，速度較快)
 BATCH_SIZE = 5 # 既然只處理 10 筆，我們 BATCH_SIZE 設小一點
 
-# 5. [AI 的關鍵] 多模態烘焙的權重
-IMG_WEIGHT = 0.6
-TEXT_WEIGHT = 0.4
-# --- 結束設定 ---
 
 def load_error_ids(error_file):
     """
@@ -114,7 +110,6 @@ def vectorize_and_insert():
         with open(LDJSON_FILE_PATH, 'r', encoding='utf-8') as f:
             for i, line in enumerate(f):
                 
-                # [!! 您的要求 !!] 檢查是否達到了 10 筆的處理上限
                 if RECORDS_TO_PROCESS is not None and processed_count >= RECORDS_TO_PROCESS:
                     print(f"\n已達到 {RECORDS_TO_PROCESS} 筆的處理上限，停止讀取檔案。")
                     break 
@@ -149,23 +144,8 @@ def vectorize_and_insert():
                     
                     # C1. 處理圖片 (我們「讀取」本地檔案)
                     image = Image.open(image_path)
-                    v_img = model.encode(image, normalize_embeddings=True)
-                    
-                    # C2. 處理文字 (串接乾淨的文字)
-                    text_data = (
-                        data.get("product_name", "") + " " +
-                        data.get("meta_keywords", "") + " " +
-                        data.get("brand", "")
-                    )
-                    v_text = model.encode(text_data, normalize_embeddings=True)
-                    
-                    # C3. [關鍵] 組合成最終的多模態向量
-                    # (我們使用 numpy 來做加權平均)
-                    embedding_to_store = (v_img * IMG_WEIGHT) + (v_text * TEXT_WEIGHT)
-                    
-                    # C4. 再次標準化 (確保向量長度為 1，這對 cosine similarity 很重要)
-                    embedding_to_store = embedding_to_store / np.linalg.norm(embedding_to_store)
-                    
+                    embedding = model.encode(image, normalize_embeddings=True)
+                    embedding_list = embedding.tolist()        
                     # --- D4. 準備 SQL 資料 ---
                     
                     record = (
@@ -175,7 +155,7 @@ def vectorize_and_insert():
                         parse_price(data.get("sales_price")),
                         parse_rating(data.get("rating")),
                         data.get("amazon_prime__y_or_n", "N")[0], # 只取第一個字元 (Y/N)
-                        embedding_to_store.tolist() # 將 numpy 陣列轉為 Python 列表
+                        embedding_list # 將 numpy 陣列轉為 Python 列表
                     )
                     
                     data_to_insert.append(record)

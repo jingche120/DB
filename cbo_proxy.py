@@ -226,8 +226,8 @@ if __name__ == "__main__":
     # 它對應的檔案名稱是 '062d927729.jpg' (uniq_id 的末 10 碼 + .jpg)
     USER_IMAGE_PATH = "img/062d927729.jpg" # (LA' Facon)
     
-    #USER_TEXT_MOD = "a different color"
-    USER_TEXT_MOD = ""
+    USER_TEXT_MOD = "a different color"
+    #USER_TEXT_MOD = ""
     # [!! 關鍵修改 !!] 我們「直接」提供 SQL 篩選字串
     # (注意：'Max' 周圍的單引號 '' 必須有)
     # USER_SQL_FILTER = "brand = 'LA'' Facon' AND sales_price > 100"

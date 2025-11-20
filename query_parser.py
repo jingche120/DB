@@ -26,12 +26,12 @@ except Exception as e:
 # [AI 的關鍵] 多模態烘焙的權重
 
 
-#IMG_WEIGHT = 0.85
-#TEXT_WEIGHT = 0.15
+IMG_WEIGHT = 0.85
+TEXT_WEIGHT = 0.15
 
 
-IMG_WEIGHT = 1
-TEXT_WEIGHT = 0
+#IMG_WEIGHT = 1
+#TEXT_WEIGHT = 0
 
 
 
@@ -77,9 +77,10 @@ def get_query_vector(base_image_path, modification_text):
         v_text = model.encode(modification_text, normalize_embeddings=True)
         
         # C. [AI 核心] 執行「向量算術」(加權平均)
-        v_query = (v_img * IMG_WEIGHT) + (v_text * TEXT_WEIGHT)
+        #v_query = (v_img * IMG_WEIGHT) + (v_text * TEXT_WEIGHT)
         # 高維度的方式 球面線性插值
-        #v_query = slerp(TEXT_WEIGHT, v_img, v_text)
+        v_query = slerp(IMG_WEIGHT, v_text, v_img)
+        
         # D. 再次標準化 (確保向量長度為 1)
         v_query_normalized = v_query / np.linalg.norm(v_query)
         
