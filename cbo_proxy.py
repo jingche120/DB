@@ -139,7 +139,7 @@ def execute_plan_a(sql_filter, v_query):
         
         # [注意] <-> 是「距離」(0=最像)，所以我們用 ASC (升冪) 排序
         query_a = sql.SQL("""
-            SELECT uniq_id, brand, sales_price, (embedding <-> %s) AS similarity_score
+            SELECT uniq_id, brand, product_name,sales_price, (embedding <-> %s) AS similarity_score
             FROM products
             WHERE {sql_filter}
             ORDER BY similarity_score ASC 
@@ -178,9 +178,10 @@ def execute_plan_b(sql_filter, v_query, k=K_CANDIDATES):
         
         # 我們使用「子查詢 (Subquery)」或「通用資料表表達式 (CTE)」
         # 讓資料庫「先」跑 HNSW 索引，「再」跑 SQL 篩選
+        #-- <-> 是 pg_vector 的運算子，代表「向量距離」 %s 代表查詢向量cursor.execute(query_b, (str(v_query),)裡面的str(v_query)。
         query_b = sql.SQL("""
             WITH VectorSearch AS (
-                SELECT uniq_id, brand, sales_price, (embedding <-> %s) AS similarity_score -- <-> 是 pg_vector 的運算子，代表「向量距離」 %s 代表查詢向量cursor.execute(query_b, (str(v_query),)裡面的str(v_query)。
+                SELECT uniq_id, brand, product_name,sales_price, (embedding <-> %s) AS similarity_score 
                 FROM products
                 ORDER BY similarity_score ASC 
                 LIMIT {limit_k} -- 1. [AI] 先用 HNSW 索引找出 k 個
@@ -206,6 +207,65 @@ def execute_plan_b(sql_filter, v_query, k=K_CANDIDATES):
     finally:
         if conn:
             conn.close()
+# === 顏色關鍵字表（可以再慢慢補） ===
+COLOR_KEYWORDS = {
+    "red":   ["red", "burgundy", "crimson", "wine", "紅"],
+    "blue":  ["blue", "navy", "indigo", "藍"],
+    "black": ["black", "黑"],
+    "white": ["white", "ivory", "off-white", "白"],
+    "green": ["green", "綠"],
+    "pink":  ["pink", "粉"],
+    "yellow":["yellow", "黃"],
+    # 想要的話可以再加 other colors...
+}
+
+def detect_target_color_from_text(text: str):
+    """
+    從使用者的文字描述裡，粗略偵測「想要的顏色」。
+    找到就回傳顏色 key（例如 'red'），找不到回傳 None。
+    """
+    if not text:
+        return None
+    t = text.lower()
+    for color, keywords in COLOR_KEYWORDS.items():
+        for kw in keywords:
+            if kw in t:
+                return color
+    return None
+
+def product_matches_color(row: dict, target_color: str) -> bool:
+    """
+    看這一筆商品的名稱裡，有沒有出現目標顏色的關鍵字。
+    """
+    if not target_color:
+        return False
+    title = (row.get("product_name") or "").lower()
+    for kw in COLOR_KEYWORDS.get(target_color, []):
+        if kw in title:
+            return True
+    return False
+
+def rerank_by_color(results: list, user_text: str) -> list:
+    """
+    Top-N 之後做「顏色 re-ranking」：
+    - 先偵測使用者想要的顏色
+    - 把「名稱裡有該顏色」的商品排在前面
+    - 同樣顏色內，仍維持原本的 similarity_score 順序
+    """
+    target_color = detect_target_color_from_text(user_text)
+    if not target_color:
+        # 使用者沒有提到顏色 → 不動
+        return results
+
+    # 把有對應顏色的放前面，沒有的放後面
+    def sort_key(row):
+        match = product_matches_color(row, target_color)
+        # 這邊假設 similarity_score 越小越近
+        sim = row.get("similarity_score", 0.0)
+        return (0 if match else 1, sim)
+
+    reranked = sorted(results, key=sort_key)
+    return reranked
 
 # --- 6. [主程式] 測試 CBO ---
 if __name__ == "__main__":
@@ -224,14 +284,14 @@ if __name__ == "__main__":
     TEST_CASE_NAME = "高選擇性查詢 (High Selectivity)"
     # 我們使用 .ldjson 檔案中的第一筆資料 '26d41bdc1495de290bc8e6062d927729'
     # 它對應的檔案名稱是 '062d927729.jpg' (uniq_id 的末 10 碼 + .jpg)
-    USER_IMAGE_PATH = "img/062d927729.jpg" # (LA' Facon)
+    USER_IMAGE_PATH = "img/img/61a71a8ee9.jpg" # (LA' Facon)
     
-    USER_TEXT_MOD = "a different color"
+    USER_TEXT_MOD = "change to black color"
     #USER_TEXT_MOD = ""
     # [!! 關鍵修改 !!] 我們「直接」提供 SQL 篩選字串
     # (注意：'Max' 周圍的單引號 '' 必須有)
     # USER_SQL_FILTER = "brand = 'LA'' Facon' AND sales_price > 100"
-    USER_SQL_FILTER = "brand = 'LA'' Facon'"
+    USER_SQL_FILTER = "1 = 1"
     # ----------------------------------------------------
     # 範例 2：低選擇性 SQL (預期 CBO 應選擇「計畫 B」)
     # (您設計的範例：`brand = 'Max'`)
@@ -274,7 +334,8 @@ if __name__ == "__main__":
     else:
         results = execute_plan_b(sql_filter_string, v_query)
     execution_time = time.time() - start_time
-    
+      # --- [Phase 3.5] Top-N 之後做「顏色 re-ranking」 ---
+    #results = rerank_by_color(results, USER_TEXT_MOD)
     # --- 4. 顯示結果 ---
     print("\n" + "="*40)
     print("【查詢完成】")
@@ -290,11 +351,18 @@ if __name__ == "__main__":
     
             # Copy image to review folder
             id10 = row['uniq_id'][-10:]
-            src = f"img/{id10}.jpg"
+            src = f"img/img/{id10}.jpg"
             dst = f"review/{id10}.jpg"
             if os.path.exists(src):
                 shutil.copy(src, dst)
                 print(f"  Copied {id10}.jpg to review/")
+                try:
+                    os.startfile(dst)  # 用預設圖片檢視器打開
+                except Exception as e:
+                    print(f"  開啟圖片時發生錯誤：{e}")
+
+                # ✅ 想要一張一張慢慢看，就加這行：
+                input("  按 Enter 繼續顯示下一張...")
             else:
                 print(f"  Image {src} not found, skipping.")
     else:

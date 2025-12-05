@@ -9,6 +9,17 @@ from PIL import Image
 import numpy as np
 import re # 匯入「正則表達式」函式庫，用於解析文字
 
+# --- 修改類型關鍵字（可以慢慢補）---
+COLOR_WORDS  = ["red", "blue", "black", "white", "green", "yellow",
+                "pink", "purple", "navy",
+                "紅", "藍", "黑", "白", "綠", "黃色", "粉紅", "米色"]
+LENGTH_WORDS = ["long", "short", "mini", "maxi", "knee-length", "ankle-length",
+                "長裙", "短裙", "到膝蓋", "到腳踝"]
+STYLE_WORDS  = ["casual", "formal", "elegant", "sporty", "sexy", "office", "wedding", "party",
+                "休閒", "正式", "運動", "性感", "上班", "婚禮"]
+DETAIL_WORDS = ["lace", "pocket", "logo", "pattern", "stripe", "floral",
+                "蕾絲", "口袋", "不要logo", "不要圖案", "條紋", "碎花"]
+
 # --- 1. 載入 AI 模型 ---
 # 載入我們在 Phase 1.3 使用的「同一個」CLIP 模型
 # (它會從 ~/.cache/torch... 的「快取」中載入，所以很快)
@@ -26,7 +37,7 @@ except Exception as e:
 # [AI 的關鍵] 多模態烘焙的權重
 
 
-IMG_WEIGHT = 0.85
+IMG_WEIGHT = 1
 TEXT_WEIGHT = 0.15
 
 
@@ -57,6 +68,39 @@ def slerp(val, low, high):
     return (np.sin((1.0 - val) * omega) / so) * low + (np.sin(val * omega) / so) * high
 
 
+def choose_img_weight(mod_text: str) -> float:
+    """
+    根據使用者的「微調文字」決定這次查詢的 IMG_WEIGHT：
+    IMG_WEIGHT 越大 → 越信圖片
+    IMG_WEIGHT 越小 → 越信文字
+    """
+    if not mod_text:
+        # 沒有文字描述：幾乎完全照圖片找
+        return 0.8
+
+    text = mod_text.lower()
+
+    has_color  = any(w in text for w in COLOR_WORDS)
+    has_length = any(w in text for w in LENGTH_WORDS)
+    has_style  = any(w in text for w in STYLE_WORDS)
+    has_detail = any(w in text for w in DETAIL_WORDS)
+
+    # 1) 先從「很信圖片」開始
+    img_w = 0.8
+
+    # 2) 每偵測到一種修改，就「少信一點圖片，多聽一點文字」
+    if has_color:
+        img_w -= 0.4    # 改顏色：圖片參考價值下降
+    if has_length:
+        img_w -= 0.2    # 改長度/版型：也很關鍵
+    if has_style:
+        img_w -= 0.1    # 改風格/場合：中等影響
+    if has_detail:
+        img_w -= 0.1    # 細節（口袋、蕾絲）影響稍小
+
+    # 3) 夾在合理範圍內，避免太極端
+    img_w = max(0.3, min(0.8, img_w))
+    return img_w
 
 
 def get_query_vector(base_image_path, modification_text):
@@ -69,23 +113,24 @@ def get_query_vector(base_image_path, modification_text):
         return None
 
     try:
-        # A. 將「基準圖片」轉換為向量
+        # A. 圖片 → 向量
         image = Image.open(base_image_path)
         v_img = model.encode(image, normalize_embeddings=True)
         
-        # B. 將「微調文字」轉換為向量
+        # B. 文字 → 向量（若沒有文字，就給個空字串）
+        modification_text = modification_text or ""
         v_text = model.encode(modification_text, normalize_embeddings=True)
-        
-        # C. [AI 核心] 執行「向量算術」(加權平均)
-        #v_query = (v_img * IMG_WEIGHT) + (v_text * TEXT_WEIGHT)
-        # 高維度的方式 球面線性插值
+
+        # C. 根據文字內容決定這次查詢的 IMG_WEIGHT
+        IMG_WEIGHT = choose_img_weight(modification_text)
+        print(f"[Query Parser] 本次查詢 IMG_WEIGHT = {IMG_WEIGHT:.2f}")
+
+        # D. 用 slerp 做圖文混合
         v_query = slerp(IMG_WEIGHT, v_text, v_img)
-        
-        # D. 再次標準化 (確保向量長度為 1)
+
+        # E. 正規化後回傳
         v_query_normalized = v_query / np.linalg.norm(v_query)
-        
-        print(f"[Query Parser] 成功生成查詢向量 (V_query)。")
-        return v_query_normalized.tolist() # 轉為 Python 列表，方便傳輸
+        return v_query_normalized.tolist()
 
     except FileNotFoundError:
         print(f"錯誤：找不到圖片檔案 {base_image_path}")
