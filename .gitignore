@@ -7,6 +7,7 @@ env/
 *.db
 *.csv
 *.json
+*.zip
 img/
 
 # 忽略系統檔
