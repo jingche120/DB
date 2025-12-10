@@ -48,7 +48,7 @@ TEXT_WEIGHT = 0.15
 
 def slerp(val, low, high):
     """
-    球面線性插值 (Spherical Linear Interpolation)
+         (Spherical Linear Interpolation)
     這是處理高維向量 (如 CLIP embedding) 的標準數學方法。
     比簡單的加權平均更能保留原始特徵。
     
